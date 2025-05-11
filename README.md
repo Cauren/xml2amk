@@ -20,7 +20,7 @@ The result can serve directly as input to AddmusicK or can be edited further as 
 
 ## What it can do
 
-xml2amk will properly translate all notes from all saves in the system, provided there are no chords
+xml2amk will properly translate all notes from all staves in the system, provided there are no chords
 in any voice (split multiple notes in a staff into separate voices if you do not want to have one
 staff per voice.
 
@@ -29,7 +29,7 @@ staff per voice.
 - articulations (accents, staccato, tenuto and slurs)
 - any key signature/accidentals and transposing instruments
 
-###AddmusicK specific trickery:
+### AddmusicK specific trickery:
 - The first coda of a system will be translated into an "intro" mark (`/`), from which a repeating
   song will restart after the first play (in effect, there is an implicit _da coda al fine_)
 - Placing an expression text item can be interpreted as an instrument selection, with the form

@@ -1,4 +1,4 @@
-#MusicXML to AddmusicK converter
+# MusicXML to AddmusicK converter
 
 Translates musicxml parts into the .txt format expected by AddmusicK (version 1.0.11 though it may
 work with earlier versions with a bit of tweaking).
@@ -10,7 +10,7 @@ This was tested with exported
 systems from MuseScore 4, though I expect it should work with (uncompressed) musicXML exports from other
 notation software with possibly minor tweaks.
 
-Usage: `cat [FILE]`
+Usage: `xml2amk [FILE]`
 
 Sends the converted FILE to standard output.  FILE must be an <ins>uncompressed</ins> MusicXML file
 containing a __score-partwise__ section of version 3 or above.  In practice, every notation software

@@ -24,7 +24,7 @@ xml2amk will properly translate all notes from all saves in the system, provided
 in any voice (split multiple notes in a staff into separate voices if you do not want to have one
 staff per voice.
 
-###Supported:
+### Supported:
 - dynamics
 - articulations (accents, staccato, tenuto and slurs)
 - any key signature/accidentals and transposing instruments
@@ -45,7 +45,7 @@ Currently, error handling is minimal.  The script will die if it encounters some
 cannot cope with, but is otherwise extremely liberal in what input it will accept (and ignore)
 to avoid notation it doesn't know from breaking the conversion.
 
-###Planned:
+### Planned:
 - Repeat sections (they are currently being ignored, except for a coda as noted above)
 - smart(er) guesses at builtin or custom instruments based on what the staff instruments are (right
   now everthing defaults to `@0` unless you specify an instrument.

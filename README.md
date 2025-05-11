@@ -3,8 +3,12 @@
 Translates musicxml parts into the .txt format expected by AddmusicK (version 1.0.11 though it may
 work with earlier versions with a bit of tweaking).
 
+It was developped and tested under Linux, but it should work without issue on any platform that can run perl
+from a command line (including Windows and MacOS at least).
+
 This is written in pretty straightforward perl 5 with only `XML::LibXML` and `XML::Parser` as dependencies.  Both
 of those are usually available via every distribution's package managers or can be gotten via CPAN.
+
 
 This was tested with exported
 systems from MuseScore 4, though I expect it should work with (uncompressed) musicXML exports from other
@@ -49,6 +53,3 @@ to avoid notation it doesn't know from breaking the conversion.
 - Repeat sections (they are currently being ignored, except for a coda as noted above)
 - smart(er) guesses at builtin or custom instruments based on what the staff instruments are (right
   now everthing defaults to `@0` unless you specify an instrument.
-
-use XML::LibXML;
-use XML::Parser;

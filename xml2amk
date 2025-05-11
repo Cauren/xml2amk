@@ -1,0 +1,534 @@
+#! /usr/bin/perl
+
+use XML::LibXML;
+use XML::Parser;
+# use Data::Dumper;
+
+my $file = shift @ARGV;
+my $xml = XML::Parser->new(
+  Style=>'Tree',
+  location=>$file,
+  load_ext_dtd=>0,
+  no_blanks=>1
+)->parsefile($file);
+
+
+sub parse($);
+sub parse($) {
+  my $elem = $_[0];
+  my $hash = shift @$elem;
+  my $text = '';
+  foreach my($tag, $c) (@$elem) {
+    if($tag eq '0') {
+      $text .= $1 if $c =~ m/^\s*(.*\S)\s*$/;
+      next;
+    }
+    push @{$hash->{elem}}, $tag, parse($c);
+  }
+  return $text unless %$hash;
+  $hash->{text} = $text if $text ne '';
+  return $hash;
+}
+
+sub elem($@) {
+  my($hash, @tags) = @_;
+  my $tag = shift @tags;
+  my @matches;
+  if(defined $hash->{elem}) {
+    foreach my($k, $v) (@{$hash->{elem}}) {
+      if($k eq $tag) {
+	push @matches, elem($v, @tags) if $#tags>=0;
+	push @matches, $v if $#tags<0;
+      }
+    }
+  }
+  return wantarray? @matches: $matches[0];
+}
+
+sub crunch($) {
+  my $val = $_[0];
+  return undef unless defined $val;
+  return $val unless ref($val) eq 'HASH' and defined $val->{elem};
+  my %val;
+  foreach my $k (keys %$val) {
+    $val{$k} = $val->{$k} unless $k eq 'elem';
+  }
+  foreach my($k, $v) (@{$val->{elem}}) {
+    if(defined $val{$k}) {
+      next unless $v;
+      $val{$k} = [ $val{$k} ] unless ref($val{$k}) eq 'ARRAY';
+      push @{$val{$k}}, crunch($v);
+    } else {
+      $val{$k} = crunch($v);
+    }
+  }
+  return \%val;
+}
+
+my @samples;
+my @insts;
+
+sub instrument($) {
+  my $inst = $_[0];
+  return 0+$1  if $inst =~ m/^@([0-9]+)\s*/;
+  return undef unless $inst =~m/"(.*)"\s*\$([0-9a-fA-F][0-9a-fA-F])
+	  \s*\$([0-9a-fA-F][0-9a-fA-F])
+	  \s*\$([0-9a-fA-F][0-9a-fA-F])
+	  \s*\$([0-9a-fA-F][0-9a-fA-F])
+	  \s*\$([0-9a-fA-F][0-9a-fA-F]) /x;
+  my $sam = 0;
+  my $adsr = sprintf('$%02X $%02X $%02X $%02X $%02X', hex $2, hex $3, hex $4, hex $5, hex $6);
+  while($sam <= $#samples) {
+    last if $samples[$sam] eq $1;
+    $sam++;
+  }
+  $samples[$sam] = $1 unless $sam<=$#samples;
+  my $in = 0;
+  while($in <= $#insts) {
+    last if $insts[$in]->{sample} == $sam and $insts[$in]->{adsr} eq $adsr;
+    $in++;
+  }
+  $insts[$in] = { sample=>$sam, adsr=>$adsr } unless $in<=$#insts;
+  return 30+$in;
+}
+
+unshift @$xml, {};
+my $song = parse($xml);
+my $score = elem $song, 'score-partwise';
+my %parts;
+
+my $song_title = 'Untitled';
+my $song_author = 'unspecified';
+my $song_arranger;
+my $song_game;
+
+if(my $work = crunch elem $score, 'work') {
+  $song_title = $work->{'work-title'}  if defined $work->{'work-title'};
+}
+
+if(my $id = elem $score, 'identification') {
+  foreach my $c (elem $id, 'creator') {
+    $song_author = $c->{text} if $c->{type} eq 'composer';
+    $song_arranger = $c->{text} if $c->{type} eq 'arranger';
+  }
+  $song_game = elem $id, 'source';
+}
+
+# This has turned out to not be actually useful.  Huh.
+#
+#my %spart;
+#
+#if(my $pl = elem $score, 'part-list') {
+#  foreach my $part (elem $pl, 'score-part') {
+#    my %pi;
+#    foreach my($k, $v) (@{$part->{elem}}) {
+#	$pi{name} = $v if $k eq 'part-name';
+#	if($k eq 'score-instrument') {
+#	  print 'score-instrument: ', Dumper(crunch $v);
+#        }
+#    }
+#    $spart{$part->{id}} = \%pi;
+#  }
+#}
+
+my %pitches = (C=>0, D=>2, E=>4, F=>5, G=>7, A=>9, B=>11);
+foreach my $part (elem $score, 'part') {
+  my %part = ( id=>$part->{id}, measures=>[] );
+
+  foreach my $pm (elem $part, 'measure') {
+    my $m = [];
+    die "Measure $pm->{number} of part $part{id} duplicated\n" if defined $part{measures}->[$pm->{number}-1];
+    $part{measures}->[$pm->{number}-1] = $m;
+    foreach my($k, $v) (@{$pm->{elem}}) {
+
+      if($k eq 'direction') {
+	my $md = crunch($v);
+	if(defined $md->{'direction-type'}) {
+	  foreach my $dir (keys %{$md->{'direction-type'}}) {
+	    push @$m, { $dir, $md->{'direction-type'}->{$dir} };
+	    $m[$#m]->{voice} = $md->{'voice'}  if defined $md->{'voice'};
+	  }
+	}
+        # print "DIR: ", Dumper($md);
+      }
+
+      if($k eq 'attributes') {
+	my $ma = crunch($v);
+	foreach my $attr ('key', 'time', 'divisions', 'transpose') {
+	  push @$m, { $attr => $ma->{$attr} } if defined $ma->{$attr};
+	}
+        # print "ATTR:", Dumper($ma);
+      }
+
+      if($k eq 'note') {
+	my $mn = crunch($v);
+        my $n = { duration => $mn->{duration}, voice => defined($mn->{voice})? 0+$mn->{voice}: 1 };
+
+        if(defined $mn->{pitch}) {
+  	  my $note = $mn->{pitch}->{step};
+  	  my $oct = 0+$mn->{pitch}->{octave};
+  	  my $pitch = $pitches{$note} + $oct*12;
+  	  $pitch += 0+$mn->{pitch}->{alter} if defined $mn->{pitch}->{alter};
+  	  $n->{pitch} = $pitch;
+	}
+
+	if(my $nn = $mn->{notations}) {
+	  foreach my $not (keys %{$mn->{notations}}) {
+	    $n->{$not} = $mn->{notations}->{$not};
+	  }
+	}
+
+        push @$m, $n;
+      }
+
+    }
+
+  }
+  print ";part $part{id}: ", $#{$part{measures}}+1, " measures\n";
+
+  $parts{$part{id}} = \%part;
+}
+
+# pass 1: find and assign all the voices
+my @voices;
+foreach my $part (sort { $a cmp $b } keys %parts) {
+  my %seen;
+  foreach my $m (@{$parts{$part}->{measures}}) {
+    foreach my $e (@$m) {
+      $seen{$e->{voice}} = 1 if defined $e->{voice};
+    }
+  }
+  foreach $v (keys %seen) {
+    push @voices, { part=>$part, voice=>$v };
+  }
+}
+
+my @tempi;
+my $coda;
+my %beats = (
+	whole => 1024,
+	half => 2048,
+	quarter => 8192,
+	eight => 16384,
+	sixteenth => 32768
+);
+
+
+# pass 2: create the voice event streams, counting time
+# we count time such that one quarter note is 21600 ticks making it easily divisible by anything
+foreach my $voice (@voices) {
+  my $part = $parts{$voice->{part}};
+  my $vn = $voice->{voice};
+  my @ev;
+
+  my $beattype;
+  my $beats;
+  my $division;
+  my $transpose = 0;
+  my $time = 0;
+  my $time_p_m;
+  my $last_measure = 0;
+  my $tie;
+  my $slur;
+
+  for(my $mn=0; $mn<=$#{$part->{measures}}; $mn++) {
+
+    unless(defined $part->{measures}->[$mn]) {
+      die "empty measure sans time signature\n" unless defined $time_p_m;
+      push @ev, { ts => $time, len => $time_p_m };
+      $time += $time_p_m;
+      next;
+    }
+
+    my $mstart = $time;
+
+    foreach my $e (@{$part->{measures}->[$mn]}) {
+      my %e = %$e;
+      $e{ts} = $time;
+      $e{measure} = $mn;
+      if(defined $e{time}) {
+	$beattype = 0+$e{time}->{'beat-type'};
+	$beats = 0+$e{time}->{'beats'};
+	$time_p_m = 21600*4 * $beats / $beattype;
+      }
+      if(defined $e{divisions}) {
+	$division = 0+$e{divisions};
+      }
+      if(defined $e{transpose}) {
+	$transpose = 0;
+	$transpose += 0+$e{transpose}->{chromatic} if defined $e{transpose}->{chromatic};
+	$transpose += 12*$e{transpose}->{'octave-change'} if defined $e{transpose}->{'octave-change'};
+      }
+
+      next if defined($e{voice}) and $e{voice} != $vn;
+
+      if(defined $e{duration}) {
+	my $len = $e{duration}*21600 / $division;
+	$e{len} = $len;
+	$time += $len;
+	$e{pitch} += $transpose  if defined $e{pitch} and $transpose;
+      }
+
+      if(defined $e{words}) {
+	my $span = $e{words};
+	$span = [ $span ] unless ref($span) eq 'ARRAY';
+	my $text = '';
+	for my $w ( @$span ) {
+	  $text .= $w->{text};
+	}
+	$e{instr} = instrument $text;
+      }
+      if(defined $e{dynamics}) {
+	$e{dynamics} = [ keys %{$e{dynamics}} ];
+      }
+      if(defined $e{wedge}) {
+	$e{$e{wedge}->{type}} = $e{wedge}->{number};
+      }
+      if(defined $e{metronome}) {
+	my $beat = $beats{$e{metronome}->{'beat-unit'}};
+	die "Unknown beat unit ('$e{metronome}->{'beat-unit'}') in tempo.\n" unless defined $beat;
+	die "No actual per-minute beat set.\n" unless defined $e{metronome}->{'per-minute'};
+	my $tempo = int($beat * $e{metronome}->{'per-minute'} / 20025);
+	push @tempi, { time => $time, tempo => $tempo };
+	next;
+      }
+      if(defined $e->{coda}) {
+	$coda = $time unless defined $coda;
+	next;
+      }
+
+      if(defined $e{slur}) {
+	my $start;
+	my $stop;
+	foreach my $act ((ref($e{slur}) eq 'ARRAY')? @{$e{slur}}: ($e{slur})) {
+	  $start = 1 if $act->{type} eq 'start';
+	  $stop = 1  if $act->{type} eq 'stop';
+	}
+	$slur = 1   if $start and not $stop;
+	undef $slur if $stop and not $start;
+      }
+      if(defined $e{pitch}) {
+	if(defined $e{articulations}) {
+	  foreach my $art (keys %{$e{articulations}}) {
+	    $e{dur} = 1 if $art eq 'staccato';
+	    $e{dur} = 7 if $art eq 'tenuto';
+	    $e{atk} = 13 if $art eq 'accent';
+	    $e{atk} = 15 if $art eq 'strong-accent';
+	  }
+	}
+	$e{dur} = 7 if $slur;
+      }
+
+      if(defined $tie) {
+	$tie->{len} += $e{len};
+	undef $e{len};
+      }
+
+      if(defined $e{tied}) {
+	my $start;
+	my $stop;
+	foreach my $act ((ref($e{tied}) eq 'ARRAY')? @{$e{tied}}: ($e{tied})) {
+	  $start = 1 if $act->{type} eq 'start';
+	  $stop = 1  if $act->{type} eq 'stop';
+	}
+	$slur = 1   if $start and not $stop;
+	if($start and not $stop) {
+	  $tie = \%e;
+	} elsif($stop and not $start) {
+	  undef $tie;
+	}
+      }
+
+      push @ev, \%e;
+    }
+
+    if($time==$mstart) { # empty measure, just rest
+      push @ev, { ts=>$time, measure=>$mn, len=>$time_p_m, voice=>$vn };
+      $time += $time_p_m;
+    }
+
+    if($time-$mstart != $time_p_m) {
+      die "Oh noes $time - $mstart != $time_p_m at voice $vn measure $mn!\n";
+    }
+  }
+
+  $voice->{events} = \@ev;
+}
+
+
+my @durations = (
+	1 => 86400,
+	2 => 43200,
+	3 => 28800,
+	4 => 21600,
+	6 => 14400,
+	8 => 10800,
+	12 => 7200,
+	16 => 5400,
+	24 => 3600,
+	32 => 2700,
+	48 => 1800,
+	64 => 1350,
+	96 =>  900,
+	192 => 450
+);
+
+my %volumes = (
+	'pppp' => 50,
+	 'ppp' => 70,
+	  'pp' => 90,
+	   'p' => 110,
+	  'mp' => 130,
+	  'mf' => 150,
+	   'f' => 170,
+	  'ff' => 200,
+	 'sfz' => 210,
+	 'fff' => 220,
+	'ffff' => 255,
+);
+
+# pass 3: apply dynamics
+for(my $vn=0; $vn<=$#voices; $vn++) {
+  my $events = $voices[$vn]->{events};
+  my $vol = $volumes{mf};
+
+  for(my $en=0; $en<=$#{$events}; $en++) {
+    my $e = $events->[$en];
+
+    if(defined $e->{dynamics}) {
+      foreach (@{$e->{dynamics}}) {
+	$vol = $volumes{$_} if defined $volumes{$_};
+      }
+    }
+    if(defined $e->{crescendo} or defined $e->{decrescendo}) {
+      my $dir = defined($e->{crescendo})? 1: -1;
+      my $cend = $en;
+      my $lvol;
+      while($cend<$#{$events}) {
+	$lvol = $volumes{$events->[$cend]->{dynamics}->[0]} if defined $events->[$cend]->{dynamics};
+	last if defined $events->[$cend]->{stop};
+	$cend++;
+      }
+      my $cet = $events->[$cend]->{ts};
+      unless(defined $lvol and ($lvol<=>$vol) == $dir) {
+	while(not defined $lvol and $cend<=$#{$events} and $events->[$cend]->{ts}==$cet) {
+	  $lvol = $volumes{$events->[$cend]->{dynamics}->[0]} if defined $events->[$cend]->{dynamics};
+	  $cend++;
+	}
+      }
+      $lvol = ($dir<0)? $volumes{p}: $volumes{f}  unless defined $lvol and ($lvol<=>$vol) == $dir;
+
+      for(my $ce=$en; $ce<$cend; $ce++) {
+	next unless defined $events->[$ce]->{pitch};
+	my $frac = ($events->[$ce]->{ts}-$e->{ts}) / ($cet-$e->{ts});
+	$events->[$ce]->{vol} = int(($lvol-$vol)*$frac + $vol);
+      }
+    }
+
+    next unless defined $e->{pitch};
+    $e->{vol} = $vol unless defined $e->{vol};
+  }
+}
+
+# final pass: output AMK
+
+print "#amk 4\n\n#spc\n{\n";
+print "  #author \"$song_author\"\n" if defined $song_author;
+print "  #title \"$song_title\"\n" if defined $song_title;
+print "  #game \"$song_game\"\n" if defined $song_game;
+print "  #comment \"arr.: $song_arranger\"\n" if defined $song_arranger;
+print "}\n\n";
+
+print "#samples {\n";
+print "  #default\n";
+foreach my $sn (@samples) {
+  print "  \"$sn\"\n";
+}
+print "}\n\n";
+
+print "#instruments {\n";
+foreach my $i (@insts) {
+  printf "  %-40s %s\n", "\"$samples[$i->{sample}]\"", $i->{adsr};
+}
+print "}\n\n";
+
+for(my $vn=0; $vn<=$#voices; $vn++) {
+  print "#$vn ; part ", $voices[$vn]->{part}, " voice ", $voices[$vn]->{voice}, "\n";
+  my $mn = 0;
+  my $co = -2;
+  my $cvol = 0;
+  my $cinst = 0;
+  my $tempo = 0;
+  my $intro = $coda;
+  my $cqxy;
+  
+  foreach my $e (@{$voices[$vn]->{events}}) {
+    if(defined $e->{instr} and $e->{instr} != $cinst) {
+	$cinst = $e->{instr};
+	print "\@$cinst\n";
+    }
+    if($e->{measure} != $mn) {
+      $mn = $e->{measure};
+      print (($mn % 4)? "  ": " ;$mn\n");
+    }
+    if($tempo<=$#tempi and $e->{ts}>=$tempi[$tempo]->{time}) {
+      print "t", $tempi[$tempo]->{tempo}, "\n";
+      $tempo++;
+    }
+    if(defined $intro and $e->{ts}>=$intro) {
+      print "/ ";
+      undef $intro;
+    }
+    if(defined $e->{len}) {
+      my $note = 'r';
+      if(defined $e->{pitch}) {
+	my $vol = $e->{vol};
+	my $qx = 6;
+	my $qy = 12;
+	$qx = $e->{dur} if defined $e->{dur};
+	$qy = $e->{atk} if defined $e->{atk};
+	my $qxy = $qx*16 + $qy;
+	if($qxy != $cqxy) {
+	  printf "q%02X", $qxy;
+	  $cqxy = $qxy;
+	}
+	if($vol != $cvol) {
+	  printf "v%d", $vol;
+	  $cvol = $vol;
+	}
+	my $tone = $e->{pitch} % 12;
+	my $oct = ($e->{pitch}-$tone)/12;
+        $note = ('c', 'c+', 'd', 'd+', 'e', 'f', 'f+', 'g', 'g+', 'a', 'a+', 'b')[$tone];
+	if($oct == ($co+1)) {
+	  $note = ">$note";
+	} elsif($oct == ($co-1)) {
+	  $note = "<$note";
+	} elsif($oct != $co) {
+	  $note = "o$oct$note";
+	}
+	$co = $oct;
+      }
+      print $note;
+      my @lens;
+      $len = $e->{len};
+      foreach my($ord, $dur) (@durations) {
+	while($len >= $dur) {
+	  $len -= $dur;
+	  push @lens, $ord;
+	}
+	last unless $len;
+      }
+      print join('^',@lens);
+    }
+  }
+  print " ; end at $mn\n";
+  print "\n";
+}
+
+# #spc
+# {
+# #author "Dan Schmidt & Jon Blackley"
+# #game   "Ultima Underworld II"
+# #title	"Scintillus Academy"
+# }
+# 

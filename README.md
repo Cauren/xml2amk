@@ -3,8 +3,12 @@
 Translates musicxml parts into the .txt format expected by AddmusicK (version 1.0.11 though it may
 work with earlier versions with a bit of tweaking).
 
+It was developped and tested under Linux, but it should work without issue on any platform that can run perl
+from a command line (including Windows and MacOS at least).
+
 This is written in pretty straightforward perl 5 with only `XML::LibXML` and `XML::Parser` as dependencies.  Both
 of those are usually available via every distribution's package managers or can be gotten via CPAN.
+
 
 This was tested with exported
 systems from MuseScore 4, though I expect it should work with (uncompressed) musicXML exports from other
@@ -20,16 +24,16 @@ The result can serve directly as input to AddmusicK or can be edited further as 
 
 ## What it can do
 
-xml2amk will properly translate all notes from all saves in the system, provided there are no chords
+xml2amk will properly translate all notes from all staves in the system, provided there are no chords
 in any voice (split multiple notes in a staff into separate voices if you do not want to have one
 staff per voice.
 
-###Supported:
+### Supported:
 - dynamics
 - articulations (accents, staccato, tenuto and slurs)
 - any key signature/accidentals and transposing instruments
 
-###AddmusicK specific trickery:
+### AddmusicK specific trickery:
 - The first coda of a system will be translated into an "intro" mark (`/`), from which a repeating
   song will restart after the first play (in effect, there is an implicit _da coda al fine_)
 - Placing an expression text item can be interpreted as an instrument selection, with the form
@@ -45,10 +49,7 @@ Currently, error handling is minimal.  The script will die if it encounters some
 cannot cope with, but is otherwise extremely liberal in what input it will accept (and ignore)
 to avoid notation it doesn't know from breaking the conversion.
 
-###Planned:
+### Planned:
 - Repeat sections (they are currently being ignored, except for a coda as noted above)
 - smart(er) guesses at builtin or custom instruments based on what the staff instruments are (right
   now everthing defaults to `@0` unless you specify an instrument.
-
-use XML::LibXML;
-use XML::Parser;

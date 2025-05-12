@@ -2,7 +2,7 @@
 
 use XML::LibXML;
 use XML::Parser;
-# use Data::Dumper;
+use Data::Dumper;
 
 my $file = shift @ARGV;
 my $xml = XML::Parser->new(
@@ -91,6 +91,8 @@ sub instrument($) {
   $insts[$in] = { sample=>$sam, adsr=>$adsr } unless $in<=$#insts;
   return 30+$in;
 }
+
+my $compress = 0;
 
 unshift @$xml, {};
 my $song = parse($xml);
@@ -318,6 +320,7 @@ foreach my $voice (@voices) {
 	    $e{atk} = 15 if $art eq 'strong-accent';
 	  }
 	}
+	$e{dur} = 7 if defined $e{legato};
       }
 
       if(defined $tie) {
@@ -425,13 +428,150 @@ for(my $vn=0; $vn<=$#voices; $vn++) {
       }
     }
 
-    next unless defined $e->{pitch};
     $e->{vol} = $vol unless defined $e->{vol};
   }
 }
 
-# final pass: output AMK
+# pass 4: reconstruct voices as a sequence of fully specified events
+for(my $vn=0; $vn<=$#voices; $vn++) {
+  my $mn = 0;
+  my $cinst = 0;
+  my $tempo = 99;
+  my $tindex = 0;
+  my $intro = $coda;
 
+  my @out;
+  foreach my $e (@{$voices[$vn]->{events}}) {
+    $cinst = $e->{instr} if defined $e->{instr};
+    $mn = $e->{measure} if defined $e->{measure};
+    $tempo = $tempi[$tindex++]->{tempo}  if $tindex<=$#tempi and $e->{ts}>=$tempi[$tindex]->{time};
+    if(defined $intro and $e->{ts}>=$intro) {
+      push @out, { intro=>1 };
+      undef $intro;
+    }
+
+    next unless defined $e->{len};
+
+    my %note = ( len => $e->{len} );
+
+    $note{legato} = 1 if defined $e->{legato};
+    $note{instr} = $cinst;
+    $note{measure} = $mn;
+    $note{tempo} = $tempo;
+    $note{pitch} = $e->{pitch}  if defined $e->{pitch};
+    $note{vol} = $e->{vol}  if defined $e->{vol};
+    my $qx = 6;
+    my $qy = 12;
+    $qx = $e->{dur} if defined $e->{dur};
+    $qy = $e->{atk} if defined $e->{atk};
+    $note{qxy} = $qx*16 + $qy;
+
+    push @out, \%note;
+  }
+  $voices[$vn]->{events} = \@out;
+}
+
+# pass 5: find repeated segments to optimize the length
+sub match($$$$) {
+  my ($d, $from, $len, $at) = @_;
+  return undef unless $at+$len-1 <= $#{$d};
+  for(my $i=0; $i<$len; $i++) {
+    return undef if defined $d->[$from+$i]->{count};
+    foreach (qw/instr tempo len legato pitch qxy/) {
+      return undef unless $d->[$from+$i]->{$_} eq $d->[$at+$i]->{$_};
+    }
+  }
+  return 1;
+}
+
+sub matches($$$) {
+  my ($d, $from, $len) = @_;
+  my $at = $from+$len;
+  my @matches;
+  while($at+$len-1 <= $#{$d}) {
+    if(match $d, $from, $len, $at) {
+      push @matches, $at;
+      $at += $len;
+    } else {
+      $at++;
+    }
+  }
+  return @matches;
+}
+
+sub bestmatch($) {
+  my $d = $_[0];
+  my %best = (
+    from  => 0,
+    len   => 0,
+    cover => 0,
+  );
+  my $total = $#{$d}+1;
+  for(my $len = $#{$d}/2; $len>2; --$len) {
+    POS: for(my $at=0; $at<($#{$d}-$len)/2; $at++) {
+      next unless defined $d->[$at]->{len};
+      my $m = matches $d, $at, $len;
+      next unless $m>1;
+      for(my $i=$at; $i<$at+$len; $i++) {
+	if(defined $d->[$i]->{count}) {
+	  $at = $i;
+	  next POS;
+	}
+      }
+      my $coverage = $m*$len / $total;
+      if($coverage>$best{cover}) {
+	$best{from} = $at;
+	$best{len} = $len;
+	$best{cover} = $coverage;
+      }
+    }
+  }
+  return %best;
+}
+
+if($compress) {
+  my $loops=1;
+  for(my $vn=0; $vn<=$#voices; $vn++) {
+    my @out = @{$voices[$vn]->{events}};
+    my %bm = bestmatch(\@out);
+    while($bm{cover}>.02) {
+      my @src = @out;
+      @out = ();
+
+      my @reps = ( $bm{from}, matches(\@src, $bm{from}, $bm{len}) );
+      my $init = 1;
+      for(my $i=1; $i<=$#reps; $i++) {
+        last unless $reps[$i] == $reps[$i-1]+$bm{len};
+        $init++;
+      }
+      my $num;
+      if($#reps+1 == $init) {
+        # print "; superloop possible\n";
+        $num = 0;
+      } else {
+        $num = $loops++;
+      }
+      my $re = 0;
+      my $first = 1;
+      foreach my $r (@reps) {
+        if($re and $r==$re) {
+          $out[$#out]->{count}++;
+        } else {
+          push @out, @src[$re .. $r-1] unless $r<1;
+          push @out, { count=> 1, num=>$num };
+	  $out[$#out]->{loop} = [ @src[$reps[0] .. $reps[0]+$bm{len}-1] ] if $first;
+	  undef $first;
+        }
+        $re = $r+$bm{len};
+      }
+      push @out, @src[$re .. $#src] unless $re == $#src;
+      %bm = bestmatch(\@out);
+    }
+    $voices[$vn]->{events} = \@out;
+  }
+}
+
+# final pass: output AMK
 print "#amk 4\n\n#spc\n{\n";
 print "  #author \"$song_author\"\n" if defined $song_author;
 print "  #title \"$song_title\"\n" if defined $song_title;
@@ -452,91 +592,125 @@ foreach my $i (@insts) {
 }
 print "}\n\n";
 
-for(my $vn=0; $vn<=$#voices; $vn++) {
-  print "#$vn ; part ", $voices[$vn]->{part}, " voice ", $voices[$vn]->{voice}, "\n";
-  my $mn = 0;
-  my $co = -2;
-  my $cvol = 0;
-  my $cinst = 0;
-  my $legato = 0;
-  my $tempo = 0;
-  my $intro = $coda;
-  my $cqxy;
-  
-  foreach my $e (@{$voices[$vn]->{events}}) {
-    if(defined $e->{instr} and $e->{instr} != $cinst) {
-	$cinst = $e->{instr};
-	print "\@$cinst\n";
-    }
-    if($e->{measure} != $mn) {
-      $mn = $e->{measure};
-      print (($mn % 4)? "  ": " ;$mn\n");
-    }
-    if($tempo<=$#tempi and $e->{ts}>=$tempi[$tempo]->{time}) {
-      print "t", $tempi[$tempo]->{tempo}, "\n";
-      $tempo++;
-    }
-    if(defined $intro and $e->{ts}>=$intro) {
-      print "/ ";
-      undef $intro;
-    }
-    if(defined $e->{len}) {
-      if(defined $e->{legato} and not $legato) {
-	print '$F4$01';
-	$legato = 1;
-      } elsif($legato and not defined $e->{legato}) {
-	print '$F4$01';
-	$legato = 0;
-      }
-      my $note = 'r';
-      if(defined $e->{pitch}) {
-	my $vol = $e->{vol};
-	my $qx = 6;
-	my $qy = 12;
-	$qx = $e->{dur} if defined $e->{dur};
-	$qy = $e->{atk} if defined $e->{atk};
-	my $qxy = $qx*16 + $qy;
-	if($qxy != $cqxy) {
-	  printf "q%02X", $qxy;
-	  $cqxy = $qxy;
-	}
-	if($vol != $cvol) {
-	  printf "v%d", $vol;
-	  $cvol = $vol;
-	}
-	my $tone = $e->{pitch} % 12;
-	my $oct = ($e->{pitch}-$tone)/12;
-        $note = ('c', 'c+', 'd', 'd+', 'e', 'f', 'f+', 'g', 'g+', 'a', 'a+', 'b')[$tone];
-	if($oct == ($co+1)) {
-	  $note = ">$note";
-	} elsif($oct == ($co-1)) {
-	  $note = "<$note";
-	} elsif($oct != $co) {
-	  $note = "o$oct$note";
-	}
-	$co = $oct;
-      }
-      print $note;
-      my @lens;
-      $len = $e->{len};
-      foreach my($ord, $dur) (@durations) {
-	while($len >= $dur) {
-	  $len -= $dur;
-	  push @lens, $ord;
-	}
-	last unless $len;
-      }
-      print join('^',@lens);
-    }
+sub setup($$$) {
+  my($out, $s, $e) = @_;
+
+  if(defined $e->{instr} and $e->{instr} != $s->{instr}) {
+    $s->{instr} = $e->{instr};
+    push @$out, "\@$s->{instr}";
   }
-  print " ; end at $mn\n";
-  print "\n";
+  if($e->{tempo} != $s->{tempo}) {
+    $s->{tempo} = $e->{tempo};
+    push @$out, "t$s->{tempo}";
+  }
+  if($e->{vol} != $s->{vol}) {
+    $s->{vol} = $e->{vol};
+    push @$out, "v$s->{vol}";
+  }
+  if(defined $e->{legato} and not $s->{legato}) {
+    push @$out, '$F4$01';
+    $s->{legato} = 1;
+  } elsif($s->{legato} and not defined $e->{legato}) {
+    push @$out, '$F4$01';
+    $s->{legato} = 0;
+  }
+  if($s->{qxy} != $e->{qxy}) {
+    $s->{qxy} = $e->{qxy};
+    push @$out, sprintf "q%02X", $s->{qxy};
+  }
+  if($e->{vol} != $s->{vol}) {
+    $s->{vol} = $e->{vol};
+    push @$out, sprintf "v%d", $s->{vol};
+  }
 }
 
-# #spc
-# {
-# #author "Dan Schmidt & Jon Blackley"
-# #game   "Ultima Underworld II"
-# #title	"Scintillus Academy"
-# }
-# 
+sub eventout($$) {
+  my ($start, $events) = @_;
+  my @out;
+  my %s = %$start;
+  foreach my $e (@$events) {
+    if(defined $e->{count}) {
+      my $loop = '';
+      $loop .= "($e->{num})" if defined $e->{num};
+      if(defined $e->{loop}) {
+	setup \@out, \%s, $e->{loop}->[0];
+	push @out,"$loop\[";
+
+	my ($end, @loop) = eventout (\%s, $e->{loop});
+	push @out, @loop;
+	setup \@out, $end, \%s;
+
+	$loop = ']';
+      }
+      $loop .= $e->{count} if $e->{count}>1;
+      push @out, $loop;
+      next;
+    }
+
+    if(defined $e->{intro}) {
+      push @out, '/';
+      next;
+    }
+
+    setup \@out, \%s, $e;
+    my $out = '';
+    my $note = 'r';
+    if(defined $e->{pitch}) {
+      my $tone = $e->{pitch} % 12;
+      my $oct = ($e->{pitch}-$tone)/12;
+      $note = ('c', 'c+', 'd', 'd+', 'e', 'f', 'f+', 'g', 'g+', 'a', 'a+', 'b')[$tone];
+      if($oct == ($s{octave}+1)) {
+	  $note = ">$note";
+      } elsif($oct == ($s{octave}-1)) {
+	  $note = "<$note";
+      } elsif($oct != $s{octave}) {
+	  $note = "o$oct$note";
+      }
+      $s{octave} = $oct;
+    }
+
+    $out .= $note;
+    my @lens;
+    my $len = $e->{len};
+    foreach my($ord, $dur) (@durations) {
+      while($len >= $dur) {
+	$len -= $dur;
+	push @lens, $ord;
+      }
+      last unless $len;
+    }
+    $out .= join('^',@lens);
+    push @out, $out unless $out eq '';
+  }
+  
+  return (\%s, @out);
+}
+
+for(my $vn=0; $vn<=$#voices; $vn++) {
+  print "#$vn ; part ", $voices[$vn]->{part}, " voice ", $voices[$vn]->{voice}, "\n";
+
+  my(undef, @out) = eventout({
+    measure => 0,
+    octave => -2,
+    vol => 0,
+    instr => -1,
+    legato => 0,
+    tempo => 0,
+    qxy => 0,
+  }, $voices[$vn]->{events});
+
+  my $col = 0;
+  foreach my $bit (@out) {
+    if($col+length($bit) > 78) {
+      print "\n";
+      $col = 0;
+    } elsif($col > 0) {
+      print " ";
+      $col++;
+    }
+    print $bit;
+    $col += length($bit);
+  }
+  print "\n\n";
+}
+

@@ -307,16 +307,17 @@ foreach my $voice (@voices) {
 	$slur = 1   if $start and not $stop;
 	undef $slur if $stop and not $start;
       }
+      $e{legato} = 1 if $slur;
+
       if(defined $e{pitch}) {
 	if(defined $e{articulations}) {
 	  foreach my $art (keys %{$e{articulations}}) {
-	    $e{dur} = 1 if $art eq 'staccato';
+	    $e{dur} = 2 if $art eq 'staccato';
 	    $e{dur} = 7 if $art eq 'tenuto';
 	    $e{atk} = 13 if $art eq 'accent';
 	    $e{atk} = 15 if $art eq 'strong-accent';
 	  }
 	}
-	$e{dur} = 7 if $slur;
       }
 
       if(defined $tie) {
@@ -331,7 +332,6 @@ foreach my $voice (@voices) {
 	  $start = 1 if $act->{type} eq 'start';
 	  $stop = 1  if $act->{type} eq 'stop';
 	}
-	$slur = 1   if $start and not $stop;
 	if($start and not $stop) {
 	  $tie = \%e;
 	} elsif($stop and not $start) {
@@ -458,6 +458,7 @@ for(my $vn=0; $vn<=$#voices; $vn++) {
   my $co = -2;
   my $cvol = 0;
   my $cinst = 0;
+  my $legato = 0;
   my $tempo = 0;
   my $intro = $coda;
   my $cqxy;
@@ -480,6 +481,13 @@ for(my $vn=0; $vn<=$#voices; $vn++) {
       undef $intro;
     }
     if(defined $e->{len}) {
+      if(defined $e->{legato} and not $legato) {
+	print '$F4$01';
+	$legato = 1;
+      } elsif($legato and not defined $e->{legato}) {
+	print '$F4$01';
+	$legato = 0;
+      }
       my $note = 'r';
       if(defined $e->{pitch}) {
 	my $vol = $e->{vol};

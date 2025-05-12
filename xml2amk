@@ -4,6 +4,12 @@ use XML::LibXML;
 use XML::Parser;
 use Data::Dumper;
 
+my $compress = 0;
+if($ARGV[0] eq '-c') {
+  $compress = 1;
+  shift @ARGV;
+}
+
 my $file = shift @ARGV;
 my $xml = XML::Parser->new(
   Style=>'Tree',
@@ -92,8 +98,6 @@ sub instrument($) {
   return 30+$in;
 }
 
-my $compress = 0;
-
 unshift @$xml, {};
 my $song = parse($xml);
 my $score = elem $song, 'score-partwise';
@@ -115,23 +119,6 @@ if(my $id = elem $score, 'identification') {
   }
   $song_game = elem $id, 'source';
 }
-
-# This has turned out to not be actually useful.  Huh.
-#
-#my %spart;
-#
-#if(my $pl = elem $score, 'part-list') {
-#  foreach my $part (elem $pl, 'score-part') {
-#    my %pi;
-#    foreach my($k, $v) (@{$part->{elem}}) {
-#	$pi{name} = $v if $k eq 'part-name';
-#	if($k eq 'score-instrument') {
-#	  print 'score-instrument: ', Dumper(crunch $v);
-#        }
-#    }
-#    $spart{$part->{id}} = \%pi;
-#  }
-#}
 
 my %pitches = (C=>0, D=>2, E=>4, F=>5, G=>7, A=>9, B=>11);
 foreach my $part (elem $score, 'part') {
@@ -507,7 +494,7 @@ sub bestmatch($) {
     cover => 0,
   );
   my $total = $#{$d}+1;
-  for(my $len = $#{$d}/2; $len>2; --$len) {
+  for(my $len = int($#{$d}/2); $len>3; --$len) {
     POS: for(my $at=0; $at<($#{$d}-$len)/2; $at++) {
       next unless defined $d->[$at]->{len};
       my $m = matches $d, $at, $len;
@@ -518,7 +505,7 @@ sub bestmatch($) {
 	  next POS;
 	}
       }
-      my $coverage = $m*$len / $total;
+      my $coverage = ($m-1)*$len / $total;
       if($coverage>$best{cover}) {
 	$best{from} = $at;
 	$best{len} = $len;
@@ -607,10 +594,10 @@ sub setup($$$) {
     $s->{vol} = $e->{vol};
     push @$out, "v$s->{vol}";
   }
-  if(defined $e->{legato} and not $s->{legato}) {
+  if($e->{legato} and not $s->{legato}) {
     push @$out, '$F4$01';
     $s->{legato} = 1;
-  } elsif($s->{legato} and not defined $e->{legato}) {
+  } elsif($s->{legato} and not $e->{legato}) {
     push @$out, '$F4$01';
     $s->{legato} = 0;
   }
@@ -622,6 +609,16 @@ sub setup($$$) {
     $s->{vol} = $e->{vol};
     push @$out, sprintf "v%d", $s->{vol};
   }
+  if($e->{octave} > 0) {
+    if($e->{octave} == ($s->{octave}+1)) {
+      push @$out, '>';
+    } elsif($e->{octave} == ($s->{octave}-1)) {
+      push @$out, '<';
+    } elsif($e->{octave} != $s->{octave}) {
+      push @$out, sprintf("o%d", $e->{octave});
+    }
+    $s->{octave} = $e->{octave};
+  }
 }
 
 sub eventout($$) {
@@ -631,7 +628,7 @@ sub eventout($$) {
   foreach my $e (@$events) {
     if(defined $e->{count}) {
       my $loop = '';
-      $loop .= "($e->{num})" if defined $e->{num};
+      $loop .= "($e->{num})" if $e->{num};
       if(defined $e->{loop}) {
 	setup \@out, \%s, $e->{loop}->[0];
 	push @out,"$loop\[";
@@ -642,7 +639,7 @@ sub eventout($$) {
 
 	$loop = ']';
       }
-      $loop .= $e->{count} if $e->{count}>1;
+      $loop .= $e->{count}  if $e->{count}>1;
       push @out, $loop;
       next;
     }

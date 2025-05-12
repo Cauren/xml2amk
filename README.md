@@ -14,11 +14,16 @@ This was tested with exported
 systems from MuseScore 4, though I expect it should work with (uncompressed) musicXML exports from other
 notation software with possibly minor tweaks.
 
-Usage: `xml2amk [FILE]`
+Usage: `xml2amk [-c] <FILE>`
 
 Sends the converted FILE to standard output.  FILE must be an <ins>uncompressed</ins> MusicXML file
 containing a __score-partwise__ section of version 3 or above.  In practice, every notation software
 should offer this as an export option (MuseScore version 4 does so as default for a musicxml export).
+
+If the `-c` option is specified, xmk2amk will attempt to optimize the voices by finding and looping
+sections.  This will reduce the size of the output, at the cost of a fairly costly optimization
+phase during conversion.  This is probably best reserved for a final conversion once you are
+satisfied with the unoptimized result.
 
 The result can serve directly as input to AddmusicK or can be edited further as needed.
 
@@ -53,3 +58,4 @@ to avoid notation it doesn't know from breaking the conversion.
 - Repeat sections (they are currently being ignored, except for a coda as noted above)
 - smart(er) guesses at builtin or custom instruments based on what the staff instruments are (right
   now everthing defaults to `@0` unless you specify an instrument.
+
